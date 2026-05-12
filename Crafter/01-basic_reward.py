@@ -33,6 +33,7 @@ REWARD_COMPONENT_GROUPS = (
     "low_status",
     "alive",
     "potential",
+    "balance",
 )
 MAP_CHANNELS = 1 + len(crafter.constants.materials) + len(crafter.constants.objects)
 UNKNOWN_MAP_TOKEN_ID = MAP_CHANNELS
@@ -150,12 +151,12 @@ class SurvivalRewardConfig:
 
     potential_gamma: float = PPO_GAMMA
 
-    rate = 1.5
+    rate = 0.5
     health_delta: float = 2.0 * rate
     food_delta: float = 1.0 * rate
     drink_delta: float = 1.0 * rate
     energy_delta: float = 0.0
-    food_drink_balance_delta: float = 0.0
+    food_drink_balance_delta: float = 2
 
     alive_bonus: float = 0.04
     status_bonus: float = 0.0
@@ -308,6 +309,12 @@ def get_survival_reward(prev_inventory, curr_inventory, done, truncated=False, c
     components["food_drink_balance_potential_curr"] = float(
         config.food_drink_balance_delta * curr_balance_level
     )
+    balance_potential_reward = (
+        config.potential_gamma * components["food_drink_balance_potential_curr"]
+        - components["food_drink_balance_potential_prev"]
+    )
+    components["food_drink_balance_potential_reward"] = float(balance_potential_reward)
+
     potential_decay = (config.potential_gamma - 1.0) * curr_potential
     potential_delta = curr_potential - prev_potential
     potential_reward = config.potential_gamma * curr_potential - prev_potential
@@ -551,12 +558,19 @@ def empty_move_counts():
 
 
 def group_reward_components(components):
+    balance_reward = float(
+        components.get("food_drink_balance_potential_reward", 0.0)
+    )
+    total_potential_reward = float(
+        components.get("status_potential_reward", 0.0)
+    )
     return {
         "terminal": float(components.get("death_penalty", 0.0))
         + float(components.get("max_steps_bonus", 0.0)),
         "low_status": float(components.get("low_status_penalty", 0.0)),
         "alive": float(components.get("alive_bonus", 0.0)),
-        "potential": float(components.get("status_potential_reward", 0.0)),
+        "potential": float(total_potential_reward - balance_reward),
+        "balance": float(balance_reward),
     }
 
 
@@ -1196,16 +1210,12 @@ class TrainingRenderCallback:
             f"{total_move_ratios['move_up']:.3f}/"
             f"{total_move_ratios['move_down']:.3f}\n"
             "  recent_reward_components avg_per_episode/abs_share "
-            "(terminal,low_status,alive,potential):\n"
-            f"    terminal={recent_reward_averages['terminal']:.3f}/"
-            f"{recent_reward_ratios['terminal']:.3f}, "
-            f"low_status={recent_reward_averages['low_status']:.3f}/"
-            f"{recent_reward_ratios['low_status']:.3f}, "
-            f"alive={recent_reward_averages['alive']:.3f}/"
-            f"{recent_reward_ratios['alive']:.3f}, "
-            f"potential={recent_reward_averages['potential']:.3f}/"
-            f"{recent_reward_ratios['potential']:.3f}\n"
-            "  total_reward_components avg_per_episode/abs_share "
+            f"({','.join(REWARD_COMPONENT_GROUPS)}):\n"
+            f" {self.format_reward_components(recent_reward_averages, recent_reward_ratios)}\n"
+            " total_reward_components avg_per_episode/abs_share "
+            f"({','.join(REWARD_COMPONENT_GROUPS)}):\n"
+            f" {self.format_reward_components(total_reward_averages, total_reward_ratios)}\n"
+            
             "(terminal,low_status,alive,potential):\n"
             f"    terminal={total_reward_averages['terminal']:.3f}/"
             f"{total_reward_ratios['terminal']:.3f}, "
@@ -1251,6 +1261,12 @@ class TrainingRenderCallback:
             key: int(move_counts.get(key, 0)) / denominator
             for key in MOVE_ACTION_NAMES
         }
+
+    def format_reward_components(self, averages, ratios):
+        return ", ".join(
+            f"{key}={averages[key]:.3f}/{ratios[key]:.3f}"
+            for key in REWARD_COMPONENT_GROUPS
+        )
 
     def reward_component_ratios(self, components):
         denominator = sum(abs(float(components.get(key, 0.0))) for key in REWARD_COMPONENT_GROUPS)
