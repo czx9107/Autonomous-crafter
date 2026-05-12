@@ -1,0 +1,7 @@
+.vscode
+Conan
+*/__pycache__/*
+*.py[cod]
+*.egg-info/
+*/saves/
+Crafter_automatic/crafter/saves/
